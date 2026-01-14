@@ -1,22 +1,22 @@
-package proctree_test
+package pipe_test
 
 import (
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/saylorsolutions/proctree"
+	"github.com/saylorsolutions/pipelib"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestForkJoin(t *testing.T) {
 	ctx, cancel := testContext(false)
 	defer cancel()
-	ctx, cancel = proctree.WithTimeout(ctx, time.Second)
+	ctx, cancel = pipe.WithTimeout(ctx, time.Second)
 	defer cancel()
 	source := make(chan int)
-	a, b := proctree.Fork(ctx, source)
-	result := proctree.Join(ctx, a, b)
+	a, b := pipe.Fork(ctx, source)
+	result := pipe.Join(ctx, a, b)
 	var (
 		wg     sync.WaitGroup
 		values = []int{1, 2, 3, 4, 5}
@@ -53,16 +53,16 @@ func TestTryPublish(t *testing.T) {
 		<-ch
 	}()
 	<-ready
-	assert.True(t, proctree.TryPublish(ch, struct{}{}))
-	assert.False(t, proctree.TryPublish(ch, struct{}{}))
+	assert.True(t, pipe.TryPublish(ch, struct{}{}))
+	assert.False(t, pipe.TryPublish(ch, struct{}{}))
 	wg.Wait()
 }
 
 func TestTryReceive(t *testing.T) {
 	t.Run("Nil channel is reported as closed", func(t *testing.T) {
 		var ch <-chan struct{}
-		_, result := proctree.TryReceive(ch)
-		assert.Equal(t, proctree.ReceiveClosed, result)
+		_, result := pipe.TryReceive(ch)
+		assert.Equal(t, pipe.ReceiveClosed, result)
 	})
 	t.Run("Active publishing will be received", func(t *testing.T) {
 		rcv := make(chan struct{})
@@ -78,10 +78,10 @@ func TestTryReceive(t *testing.T) {
 			rcv <- struct{}{}
 		}()
 		<-ready
-		_, result := proctree.TryReceive(rcv)
-		assert.Equal(t, proctree.ReceiveRead, result)
-		_, result = proctree.TryReceive(rcv)
-		assert.Equal(t, proctree.ReceiveEmpty, result)
+		_, result := pipe.TryReceive(rcv)
+		assert.Equal(t, pipe.ReceiveRead, result)
+		_, result = pipe.TryReceive(rcv)
+		assert.Equal(t, pipe.ReceiveEmpty, result)
 		wg.Wait()
 	})
 }

@@ -1,8 +1,8 @@
-package proctree_test
+package pipe_test
 
 import (
 	"errors"
-	"github.com/saylorsolutions/proctree"
+	"github.com/saylorsolutions/pipelib"
 	"sync"
 	"testing"
 	"time"
@@ -10,9 +10,9 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func testFutureFunc(sleep time.Duration) func() proctree.Future[bool] {
-	return func() proctree.Future[bool] {
-		f, r := proctree.NewFuture[bool]()
+func testFutureFunc(sleep time.Duration) func() pipe.Future[bool] {
+	return func() pipe.Future[bool] {
+		f, r := pipe.NewFuture[bool]()
 		go func() {
 			time.Sleep(sleep)
 			r(true, nil)
@@ -21,9 +21,9 @@ func testFutureFunc(sleep time.Duration) func() proctree.Future[bool] {
 	}
 }
 
-func testErrFutureFunc(sleep time.Duration) func() proctree.Future[bool] {
-	return func() proctree.Future[bool] {
-		f, r := proctree.NewFuture[bool]()
+func testErrFutureFunc(sleep time.Duration) func() pipe.Future[bool] {
+	return func() pipe.Future[bool] {
+		f, r := pipe.NewFuture[bool]()
 		go func() {
 			time.Sleep(sleep)
 			r(false, errors.New("intentional error for testing"))
@@ -61,7 +61,7 @@ func TestFuture_GetResult_Err(t *testing.T) {
 func TestNewFutureWithTimeout(t *testing.T) {
 	existing := testFutureFunc(time.Second)()
 	start := time.Now()
-	f := proctree.NewFutureWithTimeout(100*time.Millisecond, existing)
+	f := pipe.NewFutureWithTimeout(100*time.Millisecond, existing)
 	res := f.GetResult()
 	blockingTime := time.Since(start)
 	assert.Error(t, res.Err)
@@ -71,9 +71,9 @@ func TestNewFutureWithTimeout(t *testing.T) {
 }
 
 func TestNewResolvedFuture(t *testing.T) {
-	f := proctree.NewResolvedFuture(true, nil)
+	f := pipe.NewResolvedFuture(true, nil)
 	start := time.Now()
-	f = proctree.NewFutureWithTimeout(100*time.Millisecond, f)
+	f = pipe.NewFutureWithTimeout(100*time.Millisecond, f)
 	res := f.GetResult()
 	blockingTime := time.Since(start)
 	assert.Less(t, blockingTime, 100*time.Millisecond)
@@ -86,7 +86,7 @@ func TestFuture_OnResultAvailable(t *testing.T) {
 	wg.Add(1)
 	start := time.Now()
 	f := testFutureFunc(100 * time.Millisecond)()
-	f.OnResultAvailable(func(r *proctree.Result[bool]) {
+	f.OnResultAvailable(func(r *pipe.Result[bool]) {
 		defer wg.Done()
 		assert.Equal(t, true, r.Value)
 		assert.NoError(t, r.Err)

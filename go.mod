@@ -1,4 +1,4 @@
-module github.com/saylorsolutions/proctree
+module github.com/saylorsolutions/pipelib
 
 go 1.25
 

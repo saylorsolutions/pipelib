@@ -1,4 +1,4 @@
-package proctree
+package pipe
 
 import (
 	"context"
