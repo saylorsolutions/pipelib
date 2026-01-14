@@ -6,15 +6,12 @@ import (
 	"time"
 )
 
-type Logger interface {
-	Debug(msg string, args ...any)
-	Info(msg string, args ...any)
-	Warn(msg string, args ...any)
-	Error(msg string, args ...any)
-	WithValue(args ...any) Logger
-	WithGroupName(name string) Logger
-}
-
+// Context is a custom type that implements context.Context and provides utility functionality for pipelines.
+//
+// It will collect errors that occur in pipelines and are reported to the Context with Context.Alert.
+// These errors can be retrieved after execution with Context.GetAlerts.
+//
+// There are also methods to establish deadlines, timeouts, and add cancellation logic.
 type Context struct {
 	context.Context
 	logger Logger
@@ -65,7 +62,7 @@ func (c *Context) WithGroup(name string) *Context {
 	return &Context{Context: c.Context, logger: c.logger.WithGroupName(name), errs: c.errs}
 }
 
-func BaseContext(logger Logger) *Context {
+func NewContext(logger Logger) *Context {
 	if logger == nil {
 		logger = DefaultLogger()
 	}

@@ -17,16 +17,16 @@ func testContext(logDebug bool) (*proctree.Context, context.CancelFunc) {
 		opts = &slog.HandlerOptions{Level: slog.LevelDebug}
 	}
 	logger := proctree.WrapSlogLogger(slog.New(slog.NewTextHandler(os.Stdout, opts)))
-	ctx := proctree.BaseContext(logger)
+	ctx := proctree.NewContext(logger)
 	return proctree.WithTimeout(ctx, 2*time.Second)
 }
 
-func testProducer(count int) proctree.StartHandler[int] {
+func testProducer(count int) proctree.ProducerHandler[int] {
 	elements := make([]int, count)
 	for i := range count {
 		elements[i] = i
 	}
-	return proctree.BatchStartHandler(elements)
+	return proctree.BatchProducerHandler(elements)
 }
 
 func TestRunPipeline(t *testing.T) {
@@ -34,18 +34,18 @@ func TestRunPipeline(t *testing.T) {
 	defer cancel()
 	maxNum := -1
 	startCounter := proctree.NewIntCounter(time.Second, 5)
-	countStart := proctree.CountStartInvocations[int](startCounter)
+	countStart := proctree.CountProducerInvocations[int](startCounter)
 	pipeCounter := proctree.NewIntCounter(time.Second, 5)
 	countHandler := proctree.CountHandlerInvocations[int, int](pipeCounter)
 	endCounter := proctree.NewIntCounter(time.Second, 5)
-	countEnd := proctree.CountEndInvocations[int](endCounter)
-	start, startCh := proctree.Start(ctx.With("name", "start"), countStart(testProducer(10)))
-	cmp, cmpOut := proctree.Pipe(ctx.With("name", "comparator"), startCh, countHandler(func(ctx *proctree.Context, in int) (int, error) {
+	countEnd := proctree.CountConsumerInvocations[int](endCounter)
+	start, startCh := proctree.Produce(ctx.With("name", "start"), countStart(testProducer(10)))
+	cmp, cmpOut := proctree.Handle(ctx.With("name", "comparator"), startCh, countHandler(func(ctx *proctree.Context, in int) (int, error) {
 		ctx.Debug("Received number", "number", in)
 		maxNum = max(maxNum, in)
 		return maxNum, nil
 	}))
-	end := proctree.End(ctx.With("name", "end"), cmpOut, countEnd(func(ctx *proctree.Context, in int) error {
+	end := proctree.Consume(ctx.With("name", "end"), cmpOut, countEnd(func(ctx *proctree.Context, in int) error {
 		ctx.Debug("Received number", "number", in)
 		return nil
 	}))
@@ -61,9 +61,9 @@ func TestBatch(t *testing.T) {
 	ctx, cancel := testContext(false)
 	defer cancel()
 	maxNum := -1
-	start, startCh := proctree.Start(ctx.WithGroup("start"), testProducer(10))
+	start, startCh := proctree.Produce(ctx.WithGroup("start"), testProducer(10))
 	batch, batches := proctree.Batch(ctx.WithGroup("batch"), startCh, 4)
-	cmp, cmpOut := proctree.Pipe(ctx.WithGroup("comparator"), batches, func(ctx *proctree.Context, in []int) (int, error) {
+	cmp, cmpOut := proctree.Handle(ctx.WithGroup("comparator"), batches, func(ctx *proctree.Context, in []int) (int, error) {
 		ctx.Info("Received batch", "batch", in)
 		assert.LessOrEqual(t, len(in), 4)
 		assert.NotEmpty(t, in)
@@ -72,7 +72,7 @@ func TestBatch(t *testing.T) {
 		}
 		return maxNum, nil
 	})
-	end := proctree.End(ctx.WithGroup("end"), cmpOut, func(ctx *proctree.Context, in int) error {
+	end := proctree.Consume(ctx.WithGroup("end"), cmpOut, func(ctx *proctree.Context, in int) error {
 		ctx.Debug("Received number", "number", in)
 		return nil
 	})
@@ -102,11 +102,11 @@ func testCountAverage1000000(t testLogger) {
 	const testSize = 1_000_000
 	counter := proctree.NewCounter[int](time.Second, testSize)
 
-	start, startCh := proctree.Start(ctx.WithGroup("producer"), testProducer(testSize))
-	pipe, pipeCh := proctree.Pipe(ctx, startCh, func(ctx *proctree.Context, in int) (int, error) {
+	start, startCh := proctree.Produce(ctx.WithGroup("producer"), testProducer(testSize))
+	pipe, pipeCh := proctree.Handle(ctx, startCh, func(ctx *proctree.Context, in int) (int, error) {
 		return in, nil
 	})
-	end := proctree.End(ctx, pipeCh, func(ctx *proctree.Context, in int) error {
+	end := proctree.Consume(ctx, pipeCh, func(ctx *proctree.Context, in int) error {
 		counter.Increment()
 		return nil
 	})
@@ -125,14 +125,14 @@ func TestFilter(t *testing.T) {
 		return val != 2
 	})
 	endCounter := proctree.NewIntCounter(time.Second, 10)
-	countEnd := proctree.CountEndInvocations[int](endCounter)
-	start, ints := proctree.Start(ctx, testProducer(5))
-	filter, vals := proctree.Pipe(ctx, ints, no2s)
-	printer, printed := proctree.Pipe(ctx, vals, no3s(func(ctx *proctree.Context, in int) (int, error) {
+	countEnd := proctree.CountConsumerInvocations[int](endCounter)
+	start, ints := proctree.Produce(ctx, testProducer(5))
+	filter, vals := proctree.Handle(ctx, ints, no2s)
+	printer, printed := proctree.Handle(ctx, vals, no3s(func(ctx *proctree.Context, in int) (int, error) {
 		ctx.Info("I see a number", "number", in)
 		return in, nil
 	}))
-	end := proctree.End(ctx, printed, countEnd(proctree.NoOpEndHandler[int]()))
+	end := proctree.Consume(ctx, printed, countEnd(proctree.NoOpEndHandler[int]()))
 	proctree.RunPipeline(start, filter, printer, end)
 	assert.Empty(t, ctx.GetAlerts())
 	assert.Equal(t, 3, endCounter.Total())

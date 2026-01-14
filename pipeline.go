@@ -7,6 +7,8 @@ import (
 	"sync"
 )
 
+// AllowedErrors specifies what errors can occur in a pipeline without stopping execution.
+// Note that this should not be changed after calling RunPipeline, since it is continuously, asynchronously referenced when errors occur.
 var AllowedErrors = []error{
 	io.EOF,
 }
@@ -24,6 +26,8 @@ func isFiltered(err error) bool {
 	return errors.Is(err, errFiltered)
 }
 
+// RunPipeline will execute all PipelineFunc parameters in order.
+// A PipelineFunc produced by a call to Consume should be the last parameter to this function because it will block until it completes.
 func RunPipeline(funcs ...PipelineFunc) {
 	var wg sync.WaitGroup
 	for _, fn := range funcs {
@@ -32,19 +36,19 @@ func RunPipeline(funcs ...PipelineFunc) {
 	wg.Wait()
 }
 
-func drain[T any](in <-chan T) {
-	for range in {
-	}
-}
-
+// PipelineFunc is a function representing a step in a pipeline that can be passed to RunPipeline.
 type PipelineFunc func(wg *sync.WaitGroup)
 
-type StartHandler[Out any] func(ctx *Context) (Out, error)
+// ProducerHandler produces pipeline elements to be acted on by the rest of the pipeline.
+type ProducerHandler[Out any] func(ctx *Context) (Out, error)
 
-type StartMiddleware[Orig any, Out any] func(next StartHandler[Orig]) StartHandler[Out]
+// ProducerMiddleware is a function that wraps a ProducerHandler.
+// It may change the output type if desired.
+type ProducerMiddleware[Orig any, Out any] func(next ProducerHandler[Orig]) ProducerHandler[Out]
 
-func CountStartInvocations[Out any](counter *Counter[int]) StartMiddleware[Out, Out] {
-	return func(next StartHandler[Out]) StartHandler[Out] {
+// CountProducerInvocations will create a ProducerMiddleware with the provided Counter that counts the invocations of a ProducerHandler.
+func CountProducerInvocations[Out any](counter *Counter[int]) ProducerMiddleware[Out, Out] {
+	return func(next ProducerHandler[Out]) ProducerHandler[Out] {
 		return func(ctx *Context) (Out, error) {
 			out, err := next(ctx)
 			counter.Increment()
@@ -53,7 +57,8 @@ func CountStartInvocations[Out any](counter *Counter[int]) StartMiddleware[Out, 
 	}
 }
 
-func BatchStartHandler[T any](batch []T) StartHandler[T] {
+// BatchProducerHandler will create a ProducerHandler that produces each element in the given slice.
+func BatchProducerHandler[T any](batch []T) ProducerHandler[T] {
 	var mt T
 	if len(batch) == 0 {
 		return func(ctx *Context) (T, error) {
@@ -71,7 +76,8 @@ func BatchStartHandler[T any](batch []T) StartHandler[T] {
 	}
 }
 
-func Start[Out any](ctx *Context, handler StartHandler[Out]) (PipelineFunc, <-chan Out) {
+// Produce creates a PipelineFunc from a ProducerHandler that creates elements to be processed in a pipeline.
+func Produce[Out any](ctx *Context, handler ProducerHandler[Out]) (PipelineFunc, <-chan Out) {
 	ch := make(chan Out)
 	return func(wg *sync.WaitGroup) {
 		ctx.Debug("Starting source function")
@@ -107,10 +113,13 @@ func Start[Out any](ctx *Context, handler StartHandler[Out]) (PipelineFunc, <-ch
 	}, ch
 }
 
+// Handler is a function that handles inputs in a pipeline and produces a result.
 type Handler[In any, Out any] func(ctx *Context, in In) (Out, error)
 
+// HandlerMiddleware is a function that wraps calls to a Handler.
 type HandlerMiddleware[In any, Orig any, Out any] func(next Handler[In, Orig]) Handler[In, Out]
 
+// CountHandlerInvocations creates a HandlerMiddleware that wraps calls to a Handler.
 func CountHandlerInvocations[In any, Out any](counter *Counter[int]) HandlerMiddleware[In, Out, Out] {
 	return func(next Handler[In, Out]) Handler[In, Out] {
 		return func(ctx *Context, in In) (Out, error) {
@@ -123,6 +132,8 @@ func CountHandlerInvocations[In any, Out any](counter *Counter[int]) HandlerMidd
 
 var errFiltered = errors.New("this record is filtered")
 
+// ErrFiltered may be used to indicate that a pipeline element was filtered out.
+// fmt.Errorf is used, so "%w" may be used in the format.
 func ErrFiltered(format string, args ...any) error {
 	if len(format) > 0 {
 		return fmt.Errorf("%w: "+format, append([]any{errFiltered}, args...)...)
@@ -130,6 +141,7 @@ func ErrFiltered(format string, args ...any) error {
 	return fmt.Errorf("%w", errFiltered)
 }
 
+// Filter creates a Handler that will only allow pipeline elements through for which the given predicate returns true.
 func Filter[In any](predicate func(in In) bool) Handler[In, In] {
 	var mt In
 	return func(ctx *Context, in In) (In, error) {
@@ -141,6 +153,7 @@ func Filter[In any](predicate func(in In) bool) Handler[In, In] {
 	}
 }
 
+// FilterMiddleware does the same thing as Filter, but does so as a HandlerMiddleware instead of a standalone Handler.
 func FilterMiddleware[In any, Out any](predicate func(in In) bool) HandlerMiddleware[In, Out, Out] {
 	var mt Out
 	return func(next Handler[In, Out]) Handler[In, Out] {
@@ -154,6 +167,8 @@ func FilterMiddleware[In any, Out any](predicate func(in In) bool) HandlerMiddle
 	}
 }
 
+// Batch will collect pipeline elements into a slice of max length of the given size.
+// If the upstream channel is closed, then remaining elements in the batch will be passed along.
 func Batch[T any](ctx *Context, in <-chan T, size int) (PipelineFunc, <-chan []T) {
 	ch := make(chan []T)
 	if size <= 0 {
@@ -196,7 +211,8 @@ func Batch[T any](ctx *Context, in <-chan T, size int) (PipelineFunc, <-chan []T
 	}, ch
 }
 
-func Pipe[In any, Out any](ctx *Context, in <-chan In, handler Handler[In, Out]) (PipelineFunc, <-chan Out) {
+// Handle creates a PipelineFunc that represents an intermediate step in the pipeline.
+func Handle[In any, Out any](ctx *Context, in <-chan In, handler Handler[In, Out]) (PipelineFunc, <-chan Out) {
 	ch := make(chan Out)
 	var count uint64
 	return func(wg *sync.WaitGroup) {
@@ -234,12 +250,16 @@ func Pipe[In any, Out any](ctx *Context, in <-chan In, handler Handler[In, Out])
 	}, ch
 }
 
-type EndHandler[In any] func(ctx *Context, in In) error
+// ConsumerHandler is a terminal step in a pipeline.
+// These handlers will block until they have consumed all pipeline elements, and there is expected to be at most one in a pipeline.
+type ConsumerHandler[In any] func(ctx *Context, in In) error
 
-type EndMiddleware[In any] func(next EndHandler[In]) EndHandler[In]
+// ConsumerMiddleware is a function that wraps calls to a ConsumerHandler.
+type ConsumerMiddleware[In any] func(next ConsumerHandler[In]) ConsumerHandler[In]
 
-func CountEndInvocations[In any](counter *Counter[int]) EndMiddleware[In] {
-	return func(next EndHandler[In]) EndHandler[In] {
+// CountConsumerInvocations will use the given Counter to count invocations of the wrapped ConsumerHandler.
+func CountConsumerInvocations[In any](counter *Counter[int]) ConsumerMiddleware[In] {
+	return func(next ConsumerHandler[In]) ConsumerHandler[In] {
 		return func(ctx *Context, in In) error {
 			err := next(ctx, in)
 			counter.Increment()
@@ -249,13 +269,16 @@ func CountEndInvocations[In any](counter *Counter[int]) EndMiddleware[In] {
 }
 
 // NoOpEndHandler is used when there is no finalizing operation needed for the pipeline, or a placeholder is desired during development.
-func NoOpEndHandler[In any]() EndHandler[In] {
+func NoOpEndHandler[In any]() ConsumerHandler[In] {
 	return func(ctx *Context, in In) error {
 		return nil
 	}
 }
 
-func End[In any](ctx *Context, in <-chan In, handler EndHandler[In]) PipelineFunc {
+// Consume creates a blocking PipelineFunc that represents a terminal operation in a pipeline.
+// There is expected to be at most one consuming PipelineFunc in a pipeline, because they will not be run in parallel.
+// Additionally, the PipelineFunc returned from Consume should be passed as the last parameter to RunPipeline to ensure that producing and handling goroutines that consumers depend on are started first.
+func Consume[In any](ctx *Context, in <-chan In, handler ConsumerHandler[In]) PipelineFunc {
 	var count uint64
 	return func(_ *sync.WaitGroup) {
 		ctx.Debug("Starting end function")
@@ -279,7 +302,7 @@ func End[In any](ctx *Context, in <-chan In, handler EndHandler[In]) PipelineFun
 						ctx.Alert(err)
 					}
 					ctx.Debug("Draining input channel")
-					drain(in)
+					DrainSync(in)
 					return
 				}
 			}

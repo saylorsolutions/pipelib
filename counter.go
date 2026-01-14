@@ -2,6 +2,7 @@ package proctree
 
 import (
 	"fmt"
+	"math"
 	"math/big"
 	"sync"
 	"time"
@@ -12,15 +13,19 @@ const (
 	DefaultInterval          = time.Second // Defaults to 1 second intervals.
 )
 
-type NumericCounterValue interface {
+type SignedQuantity interface {
 	~int | ~int8 | ~int16 | ~int32 | ~int64
 }
 
-// Counter records measurements of a quantity over time, grouping measurements by the given interval.
-// If an intervals occurs without reported measurements, then the gap interval(s) will be filled with zeros when the next measurement is received.
+// Counter records real-time measurements of counts over time, grouping measurements by the given interval.
+// If one or more interval passes without any reported measurements, then gap intervals will be added and filled with zero quantities when the next measurement is received.
+//
+// Counter uses a fixed ring buffer of intervals, the size of which is set during initialization.
+// This means that the memory usage will be fixed to the size of the buffer.
+// This allows for fast changes to the buffer's internal state and minimal blocking due to lock contention.
 //
 // Measurements submitted that would belong to a previous interval will be committed to the latest instead for performance reasons.
-type Counter[T NumericCounterValue] struct {
+type Counter[T SignedQuantity] struct {
 	mux               sync.RWMutex
 	counterWindowSize int
 	insertPos         int
@@ -33,7 +38,7 @@ type Counter[T NumericCounterValue] struct {
 	quantity          []T
 }
 
-func NewCounter[T NumericCounterValue](interval time.Duration, bufSize int) *Counter[T] {
+func NewCounter[T SignedQuantity](interval time.Duration, bufSize int) *Counter[T] {
 	if bufSize <= 0 {
 		bufSize = DefaultCounterWindowSize
 	}
@@ -48,8 +53,20 @@ func NewCounter[T NumericCounterValue](interval time.Duration, bufSize int) *Cou
 	}
 }
 
+// BufferSizeForInterval will calculate a buffer size that will be large enough to capture measurements for a run time of maxTime.
+func BufferSizeForInterval(interval, maxTime time.Duration) int {
+	if maxTime <= interval {
+		return 1
+	}
+	return int(math.Ceil(float64(maxTime) / float64(interval)))
+}
+
 func NewIntCounter(interval time.Duration, bufSize int) *Counter[int] {
 	return NewCounter[int](interval, bufSize)
+}
+
+func NewLargeCounter(interval time.Duration, bufSize int) *Counter[int64] {
+	return NewCounter[int64](interval, bufSize)
 }
 
 // Start sets the initial timestamp to use for measurements to the current time.
@@ -80,30 +97,30 @@ func currentTimeNanos() int64 {
 	return time.Now().UnixNano()
 }
 
-// SubmitQuantity will set the quantity in the interval given the current timestamp.
+// SetAt will set the quantity in the interval at the given timestamp.
 // If the timestamp refers to a previous interval, then it will be applied to the current interval instead for performance reasons.
-func (c *Counter[T]) SubmitQuantity(measurement time.Time, quantity T) {
-	ts := measurement.UnixNano()
+func (c *Counter[T]) SetAt(timestamp time.Time, quantity T) {
+	ts := timestamp.UnixNano()
 	c.mux.Lock()
 	defer c.mux.Unlock()
-	c.submitQuantity(ts, quantity)
+	c.setAt(ts, quantity)
 }
 
-func (c *Counter[T]) submitQuantity(timestamp int64, quantity T) {
+func (c *Counter[T]) setAt(timestamp int64, quantity T) {
 	c.commitIntervals(timestamp)
 	c.lastQuantity = quantity
 }
 
-// SubmitDelta will make a change to the quantity using the given timestamp.
+// AddAt will add the delta to the interval quantity using the given timestamp.
 // If the timestamp refers to a previous interval, then it will be applied to the current interval instead for performance reasons.
-func (c *Counter[T]) SubmitDelta(measurement time.Time, delta T) {
-	ts := measurement.UnixNano()
+func (c *Counter[T]) AddAt(timestamp time.Time, delta T) {
+	ts := timestamp.UnixNano()
 	c.mux.Lock()
 	defer c.mux.Unlock()
-	c.submitDelta(ts, delta)
+	c.addAt(ts, delta)
 }
 
-func (c *Counter[T]) submitDelta(timestamp int64, delta T) {
+func (c *Counter[T]) addAt(timestamp int64, delta T) {
 	c.commitIntervals(timestamp)
 	c.lastQuantity = c.lastQuantity + delta
 }
@@ -112,8 +129,8 @@ func (c *Counter[T]) hasCurrentMeasurement() bool {
 	return c.lastTimestamp > 0
 }
 
-func (c *Counter[T]) currentMeasurement() CounterMeasurement[T] {
-	return CounterMeasurement[T]{
+func (c *Counter[T]) currentMeasurement() CounterInterval[T] {
+	return CounterInterval[T]{
 		Timestamp: time.Unix(0, c.lastTimestamp),
 		Quantity:  c.lastQuantity,
 	}
@@ -153,20 +170,20 @@ func (c *Counter[T]) commitIntervals(measurementTime int64) bool {
 	return didCommit
 }
 
-// Add will add a (positive or negative) delta to the quantity in the current interval.
+// Add will add a (positive or negative) delta to the quantity in the current interval using the current timestamp.
 func (c *Counter[T]) Add(delta T) {
 	now := currentTimeNanos()
 	c.mux.Lock()
 	defer c.mux.Unlock()
-	c.submitDelta(now, delta)
+	c.addAt(now, delta)
 }
 
-// Increment will add one to the quantity in the current interval.
+// Increment will add one to the quantity in the current interval using the current timestamp.
 func (c *Counter[T]) Increment() {
 	now := currentTimeNanos()
 	c.mux.Lock()
 	defer c.mux.Unlock()
-	c.submitDelta(now, 1)
+	c.addAt(now, 1)
 }
 
 // Len returns the number of intervals stored in this Counter.
@@ -183,12 +200,13 @@ func (c *Counter[T]) length() int {
 	return c.insertPos
 }
 
-type CounterMeasurement[T NumericCounterValue] struct {
+// CounterInterval represents an interval within a Counter that includes the starting timestamp and the quantity recorded.
+type CounterInterval[T SignedQuantity] struct {
 	Timestamp time.Time `json:"timestamp"`
 	Quantity  T         `json:"quantity"`
 }
 
-func (c *Counter[T]) GetMeasurements() []CounterMeasurement[T] {
+func (c *Counter[T]) GetMeasurements() []CounterInterval[T] {
 	c.mux.Lock()
 	defer c.mux.Unlock()
 	didCommit := c.commitIntervals(currentTimeNanos())
@@ -196,14 +214,14 @@ func (c *Counter[T]) GetMeasurements() []CounterMeasurement[T] {
 	switch numEntries {
 	case 0:
 		if c.hasCurrentMeasurement() {
-			return []CounterMeasurement[T]{c.currentMeasurement()}
+			return []CounterInterval[T]{c.currentMeasurement()}
 		}
 		return nil
 	case c.counterWindowSize:
-		entries := make([]CounterMeasurement[T], numEntries)
+		entries := make([]CounterInterval[T], numEntries)
 		for i := range c.counterWindowSize {
 			j := (i + c.insertPos) % c.counterWindowSize
-			entries[i] = CounterMeasurement[T]{
+			entries[i] = CounterInterval[T]{
 				Timestamp: time.Unix(0, c.timestamp[j]),
 				Quantity:  c.quantity[j],
 			}
@@ -213,9 +231,9 @@ func (c *Counter[T]) GetMeasurements() []CounterMeasurement[T] {
 		}
 		return entries
 	default:
-		entries := make([]CounterMeasurement[T], numEntries)
+		entries := make([]CounterInterval[T], numEntries)
 		for i := 0; i < c.insertPos; i++ {
-			entries[i] = CounterMeasurement[T]{
+			entries[i] = CounterInterval[T]{
 				Timestamp: time.Unix(0, c.timestamp[i]),
 				Quantity:  c.quantity[i],
 			}
@@ -239,12 +257,13 @@ func (c *Counter[T]) AverageWithInterval() (avg *big.Float, interval time.Durati
 	return c.average(entries), interval
 }
 
+// Average will calculate the average quantity for each interval over all stored intervals.
 func (c *Counter[T]) Average() *big.Float {
 	entries := c.GetMeasurements()
 	return c.average(entries)
 }
 
-func (c *Counter[T]) average(entries []CounterMeasurement[T]) *big.Float {
+func (c *Counter[T]) average(entries []CounterInterval[T]) *big.Float {
 	if len(entries) == 0 {
 		return new(big.Float)
 	}
@@ -259,9 +278,29 @@ func (c *Counter[T]) average(entries []CounterMeasurement[T]) *big.Float {
 
 func (c *Counter[T]) AverageString() string {
 	avg, inc := c.AverageWithInterval()
-	return fmt.Sprintf("%0.2f/%s", avg, inc)
+	return fmt.Sprintf("%0.2f/%s", avg, durationIntervalString(inc))
 }
 
+func durationIntervalString(interval time.Duration) string {
+	switch interval {
+	case time.Hour:
+		return "h"
+	case time.Minute:
+		return "m"
+	case time.Second:
+		return "s"
+	case time.Millisecond:
+		return "ms"
+	case time.Microsecond:
+		return "us"
+	case time.Nanosecond:
+		return "ns"
+	default:
+		return interval.String()
+	}
+}
+
+// Total returns the total quantities recorded in all intervals.
 func (c *Counter[T]) Total() T {
 	entries := c.GetMeasurements()
 	var sum T

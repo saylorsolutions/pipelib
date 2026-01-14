@@ -9,12 +9,43 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestBufferSizeForInterval(t *testing.T) {
+	tests := map[string]struct {
+		interval time.Duration
+		maxDur   time.Duration
+		expected int
+	}{
+		"Equal": {
+			interval: time.Second,
+			maxDur:   time.Second,
+			expected: 1,
+		},
+		"1m1s": {
+			interval: time.Second,
+			maxDur:   time.Minute + time.Second,
+			expected: 61,
+		},
+		"1m1s1ms": {
+			interval: time.Second,
+			maxDur:   time.Minute + time.Second + time.Millisecond,
+			expected: 62,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			sz := BufferSizeForInterval(tc.interval, tc.maxDur)
+			assert.Equal(t, tc.expected, sz)
+		})
+	}
+}
+
 func TestCounter_SubmitDelta(t *testing.T) {
 	t.Run("Entries within the same second", func(t *testing.T) {
 		now := time.Now()
 		counter := NewCounter[int](time.Second, 5)
 		for i := time.Duration(0); i <= 800*time.Millisecond; i += 200 * time.Millisecond {
-			counter.SubmitDelta(now.Add(i), 2)
+			counter.AddAt(now.Add(i), 2)
 		}
 		entries := counter.GetMeasurements()
 		require.Len(t, entries, 1)
@@ -28,7 +59,7 @@ func TestCounter_SubmitDelta(t *testing.T) {
 		now := time.Now()
 		counter.StartAt(now)
 		for i := 300 * time.Millisecond; i <= 1200*time.Millisecond; i += 300 * time.Millisecond {
-			counter.SubmitDelta(now.Add(i), 2)
+			counter.AddAt(now.Add(i), 2)
 		}
 		entries := counter.GetMeasurements()
 		require.Len(t, entries, 2)
@@ -50,10 +81,10 @@ func TestCounter_Average(t *testing.T) {
 	i := -1
 	for d := time.Duration(0); d < 2*time.Second; d += time.Second {
 		i++
-		counter.SubmitQuantity(now.Add(d), vals[i])
+		counter.SetAt(now.Add(d), vals[i])
 	}
 	assert.Len(t, counter.GetMeasurements(), 2)
-	assert.Equal(t, "2.50/1s", counter.AverageString())
+	assert.Equal(t, "2.50/s", counter.AverageString())
 }
 
 func benchmarkData1000(b *testing.B) []time.Time {
@@ -84,7 +115,7 @@ func BenchmarkCounter_SubmitDelta(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		counter := new(Counter[int])
 		for j := 0; j < 1_000; j++ {
-			counter.SubmitDelta(dataset[j], 1)
+			counter.AddAt(dataset[j], 1)
 		}
 	}
 }
@@ -97,7 +128,7 @@ func BenchmarkCounter_AverageString(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		counter := new(Counter[int])
 		for j := 0; j < 1_000; j++ {
-			counter.SubmitDelta(dataset[j], 1)
+			counter.AddAt(dataset[j], 1)
 		}
 		b.Log(counter.AverageString())
 	}
@@ -111,7 +142,7 @@ func BenchmarkCounter_SubmitDelta_1000000_RingBufferConstrained(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		counter := new(Counter[int])
 		for j := 0; j < 1_000_000; j++ {
-			counter.SubmitDelta(dataset[j], 1)
+			counter.AddAt(dataset[j], 1)
 		}
 	}
 }
@@ -124,7 +155,7 @@ func BenchmarkCounter_SubmitDelta_1000000_StoreAll(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		counter := NewCounter[int](time.Second, 500_000)
 		for j := 0; j < 1_000_000; j++ {
-			counter.SubmitDelta(dataset[j], 1)
+			counter.AddAt(dataset[j], 1)
 		}
 	}
 }
@@ -171,6 +202,6 @@ func BenchmarkCounter_SubmitDelta_Indv(b *testing.B) {
 	b.StartTimer()
 	for i := 0; i < b.N; i++ {
 		j = (j + 1) % len(dataset)
-		counter.SubmitDelta(dataset[j], 1)
+		counter.AddAt(dataset[j], 1)
 	}
 }
