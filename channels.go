@@ -145,7 +145,14 @@ func TryReceive[T any](in <-chan T) (T, ReceiveResult) {
 
 // Limiter is a channel that will emit messages at a fixed rate.
 // This means that reading from the channel before performing limited tasks will maintain the established rate.
-type Limiter = <-chan struct{}
+type Limiter <-chan struct{}
+
+// Wait will block until the next Limiter tick, which indicates that the operation is allowed to proceed.
+// Wait will return false if the Limiter is closed, indicating that no further operations are permitted.
+func (l Limiter) Wait() bool {
+	_, more := <-l
+	return more
+}
 
 func RateLimit(ctx context.Context, limit int, interval time.Duration) (Limiter, error) {
 	if limit <= 0 {
@@ -158,10 +165,10 @@ func RateLimit(ctx context.Context, limit int, interval time.Duration) (Limiter,
 	if timeBetweenTicks == 0 {
 		return nil, fmt.Errorf("tick interval is too small to represent")
 	}
-	lim := make(chan struct{}, limit)
+	limiter := make(chan struct{}, limit-1)
 	ticks := time.NewTicker(timeBetweenTicks)
 	go func() {
-		defer close(lim)
+		defer close(limiter)
 		defer ticks.Stop()
 		for {
 			select {
@@ -171,10 +178,10 @@ func RateLimit(ctx context.Context, limit int, interval time.Duration) (Limiter,
 				select {
 				case <-ctx.Done():
 					return
-				case lim <- struct{}{}:
+				case limiter <- struct{}{}:
 				}
 			}
 		}
 	}()
-	return lim, nil
+	return limiter, nil
 }

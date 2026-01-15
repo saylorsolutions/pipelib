@@ -17,12 +17,33 @@ func TestRateLimit(t *testing.T) {
 	limit, err := pipe.RateLimit(ctx, 20, time.Second)
 	require.NoError(t, err)
 	var count int
-	for range limit {
+	for {
+		if !limit.Wait() {
+			break
+		}
 		count++
 	}
 	t.Log("Count:", count)
 	assert.Greater(t, count, 8)
 	assert.LessOrEqual(t, count, 10)
+}
+
+func TestInterruptedRateLimit(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	limit, err := pipe.RateLimit(ctx, 10, time.Second/2)
+	require.NoError(t, err)
+	var count int
+	time.Sleep(time.Second / 2)
+	for {
+		if !limit.Wait() {
+			break
+		}
+		count++
+	}
+	t.Log("Count:", count)
+	assert.Greater(t, count, 18)
+	assert.LessOrEqual(t, count, 20)
 }
 
 func TestForkJoin(t *testing.T) {
