@@ -1,13 +1,29 @@
 package pipe_test
 
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/saylorsolutions/pipelib"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestRateLimit(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second/2)
+	defer cancel()
+	limit, err := pipe.RateLimit(ctx, 20, time.Second)
+	require.NoError(t, err)
+	var count int
+	for range limit {
+		count++
+	}
+	t.Log("Count:", count)
+	assert.Greater(t, count, 8)
+	assert.LessOrEqual(t, count, 10)
+}
 
 func TestForkJoin(t *testing.T) {
 	ctx, cancel := testContext(false)

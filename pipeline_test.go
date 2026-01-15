@@ -35,11 +35,11 @@ func TestRunPipeline(t *testing.T) {
 	defer cancel()
 	maxNum := -1
 	startCounter := pipe.NewIntCounter(time.Second, 5)
-	countStart := pipe.CountProducerInvocations[int](startCounter)
+	countStart := pipe.CountProducerInvocations[int, int](startCounter)
 	pipeCounter := pipe.NewIntCounter(time.Second, 5)
-	countHandler := pipe.CountHandlerInvocations[int, int](pipeCounter)
+	countHandler := pipe.CountHandlerInvocations[int, int, int](pipeCounter)
 	endCounter := pipe.NewIntCounter(time.Second, 5)
-	countEnd := pipe.CountConsumerInvocations[int](endCounter)
+	countEnd := pipe.CountConsumerInvocations[int, int](endCounter)
 	start, startCh := pipe.Produce(ctx.With("name", "start"), countStart(testProducer(10)))
 	cmp, cmpOut := pipe.Handle(ctx.With("name", "comparator"), startCh, countHandler(func(ctx *pipe.Context, in int) (int, error) {
 		ctx.Debug("Received number", "number", in)
@@ -126,7 +126,7 @@ func TestFilter(t *testing.T) {
 		return val != 2
 	})
 	endCounter := pipe.NewIntCounter(time.Second, 10)
-	countEnd := pipe.CountConsumerInvocations[int](endCounter)
+	countEnd := pipe.CountConsumerInvocations[int, int](endCounter)
 	start, ints := pipe.Produce(ctx, testProducer(5))
 	filter, vals := pipe.Handle(ctx, ints, no2s)
 	printer, printed := pipe.Handle(ctx, vals, no3s(func(ctx *pipe.Context, in int) (int, error) {

@@ -2,6 +2,8 @@ package pipe
 
 import (
 	"context"
+	"fmt"
+	"time"
 )
 
 // Fork sends values received from the original channel to the two returned channels.
@@ -139,4 +141,40 @@ func TryReceive[T any](in <-chan T) (T, ReceiveResult) {
 	default:
 		return mt, ReceiveEmpty
 	}
+}
+
+// Limiter is a channel that will emit messages at a fixed rate.
+// This means that reading from the channel before performing limited tasks will maintain the established rate.
+type Limiter = <-chan struct{}
+
+func RateLimit(ctx context.Context, limit int, interval time.Duration) (Limiter, error) {
+	if limit <= 0 {
+		return nil, fmt.Errorf("limit must be greater than 0")
+	}
+	if interval <= 0 {
+		return nil, fmt.Errorf("interval must be greater than 0")
+	}
+	timeBetweenTicks := interval / time.Duration(limit)
+	if timeBetweenTicks == 0 {
+		return nil, fmt.Errorf("tick interval is too small to represent")
+	}
+	lim := make(chan struct{}, limit)
+	ticks := time.NewTicker(timeBetweenTicks)
+	go func() {
+		defer close(lim)
+		defer ticks.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticks.C:
+				select {
+				case <-ctx.Done():
+					return
+				case lim <- struct{}{}:
+				}
+			}
+		}
+	}()
+	return lim, nil
 }
