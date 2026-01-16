@@ -35,21 +35,21 @@ func TestRunPipeline(t *testing.T) {
 	defer cancel()
 	maxNum := -1
 	startCounter := pipe.NewIntCounter(time.Second, 5)
-	countStart := pipe.CountProducerInvocations[int, int](startCounter)
+	countStart := pipe.CountProducerInvocations(startCounter, testProducer(10))
 	pipeCounter := pipe.NewIntCounter(time.Second, 5)
-	countHandler := pipe.CountHandlerInvocations[int, int, int](pipeCounter)
-	endCounter := pipe.NewIntCounter(time.Second, 5)
-	countEnd := pipe.CountConsumerInvocations[int, int](endCounter)
-	start, startCh := pipe.Produce(ctx.With("name", "start"), countStart(testProducer(10)))
-	cmp, cmpOut := pipe.Handle(ctx.With("name", "comparator"), startCh, countHandler(func(ctx *pipe.Context, in int) (int, error) {
+	countHandler := pipe.CountHandlerInvocations(pipeCounter, func(ctx *pipe.Context, in int) (int, error) {
 		ctx.Debug("Received number", "number", in)
 		maxNum = max(maxNum, in)
 		return maxNum, nil
-	}))
-	end := pipe.Consume(ctx.With("name", "end"), cmpOut, countEnd(func(ctx *pipe.Context, in int) error {
+	})
+	endCounter := pipe.NewIntCounter(time.Second, 5)
+	countEnd := pipe.CountConsumerInvocations(endCounter, func(ctx *pipe.Context, in int) error {
 		ctx.Debug("Received number", "number", in)
 		return nil
-	}))
+	})
+	start, startCh := pipe.Produce(ctx.With("name", "start"), countStart)
+	cmp, cmpOut := pipe.Handle(ctx.With("name", "comparator"), startCh, countHandler)
+	end := pipe.Consume(ctx.With("name", "end"), cmpOut, countEnd)
 	pipe.RunPipeline(start, cmp, end)
 	assert.Empty(t, ctx.GetAlerts())
 	assert.Equal(t, 9, maxNum)
@@ -126,15 +126,18 @@ func TestFilter(t *testing.T) {
 		return val != 2
 	})
 	endCounter := pipe.NewIntCounter(time.Second, 10)
-	countEnd := pipe.CountConsumerInvocations[int, int](endCounter)
 	start, ints := pipe.Produce(ctx, testProducer(5))
 	filter, vals := pipe.Handle(ctx, ints, no2s)
 	printer, printed := pipe.Handle(ctx, vals, no3s(func(ctx *pipe.Context, in int) (int, error) {
 		ctx.Info("I see a number", "number", in)
 		return in, nil
 	}))
-	end := pipe.Consume(ctx, printed, countEnd(pipe.NoOpEndHandler[int]()))
-	pipe.RunPipeline(start, filter, printer, end)
+	pipe.RunPipeline(
+		start,
+		filter,
+		printer,
+		pipe.Consume(ctx, printed, pipe.CountConsumerInvocations(endCounter, pipe.NoOpEndHandler[int]())),
+	)
 	assert.Empty(t, ctx.GetAlerts())
 	assert.Equal(t, 3, endCounter.Total())
 }

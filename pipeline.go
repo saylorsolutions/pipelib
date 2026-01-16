@@ -47,13 +47,11 @@ type ProducerHandler[Out any] func(ctx *Context) (Out, error)
 type ProducerMiddleware[Orig any, Out any] func(next ProducerHandler[Orig]) ProducerHandler[Out]
 
 // CountProducerInvocations will create a ProducerMiddleware with the provided Counter that counts the invocations of a ProducerHandler.
-func CountProducerInvocations[I SignedQuantity, Out any](counter *Counter[I]) ProducerMiddleware[Out, Out] {
-	return func(next ProducerHandler[Out]) ProducerHandler[Out] {
-		return func(ctx *Context) (Out, error) {
-			out, err := next(ctx)
-			counter.Increment()
-			return out, err
-		}
+func CountProducerInvocations[I SignedQuantity, Out any](counter *Counter[I], next ProducerHandler[Out]) ProducerHandler[Out] {
+	return func(ctx *Context) (Out, error) {
+		out, err := next(ctx)
+		counter.Increment()
+		return out, err
 	}
 }
 
@@ -120,13 +118,11 @@ type Handler[In any, Out any] func(ctx *Context, in In) (Out, error)
 type HandlerMiddleware[In any, Orig any, Out any] func(next Handler[In, Orig]) Handler[In, Out]
 
 // CountHandlerInvocations creates a HandlerMiddleware that wraps calls to a Handler.
-func CountHandlerInvocations[I SignedQuantity, In any, Out any](counter *Counter[I]) HandlerMiddleware[In, Out, Out] {
-	return func(next Handler[In, Out]) Handler[In, Out] {
-		return func(ctx *Context, in In) (Out, error) {
-			out, err := next(ctx, in)
-			counter.Increment()
-			return out, err
-		}
+func CountHandlerInvocations[I SignedQuantity, In any, Out any](counter *Counter[I], next Handler[In, Out]) Handler[In, Out] {
+	return func(ctx *Context, in In) (Out, error) {
+		out, err := next(ctx, in)
+		counter.Increment()
+		return out, err
 	}
 }
 
@@ -258,13 +254,11 @@ type ConsumerHandler[In any] func(ctx *Context, in In) error
 type ConsumerMiddleware[In any] func(next ConsumerHandler[In]) ConsumerHandler[In]
 
 // CountConsumerInvocations will use the given Counter to count invocations of the wrapped ConsumerHandler.
-func CountConsumerInvocations[I SignedQuantity, In any](counter *Counter[I]) ConsumerMiddleware[In] {
-	return func(next ConsumerHandler[In]) ConsumerHandler[In] {
-		return func(ctx *Context, in In) error {
-			err := next(ctx, in)
-			counter.Increment()
-			return err
-		}
+func CountConsumerInvocations[I SignedQuantity, In any](counter *Counter[I], next ConsumerHandler[In]) ConsumerHandler[In] {
+	return func(ctx *Context, in In) error {
+		err := next(ctx, in)
+		counter.Increment()
+		return err
 	}
 }
 
