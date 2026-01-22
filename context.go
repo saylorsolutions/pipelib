@@ -62,11 +62,12 @@ func (c *Context) WithGroup(name string) *Context {
 	return &Context{Context: c.Context, logger: c.logger.WithGroupName(name), errs: c.errs}
 }
 
-func NewContext(logger Logger) *Context {
-	if logger == nil {
-		logger = DefaultLogger()
+func NewContext(logger ...Logger) *Context {
+	log := DefaultLogger()
+	if len(logger) > 0 {
+		log = logger[0]
 	}
-	return &Context{Context: context.Background(), logger: logger, errs: nil}
+	return &Context{Context: context.Background(), logger: log, errs: nil}
 }
 
 func WithCancel(base *Context) (*Context, context.CancelFunc) {
