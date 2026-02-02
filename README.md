@@ -1,6 +1,6 @@
 # Pipelib
 
-Pipelib is a set of utilities that makes it easy to build pipeline processes using goroutines.
+Pipelib is a set of utilities that makes it easy to build data pipeline processes using goroutines and channels.
 There are a few different aspects.
 
 [pipeline.go](pipeline.go) contains producer, handler, and consumer functions as the elements of a pipeline.
@@ -25,4 +25,18 @@ Middleware functions are provided in [pipeline.go](pipeline.go) that interact wi
 - Can be used with arbitrary intervals, and there is a function to calculate the buffer size needed to cover the length of time required.
 - Can also return all recorded intervals for further processing or export.
 
+[metric.go](metric.go) adds metric reporting features that extend the base capabilities of `Counter`.
+- Includes a name field to differentiate `PollingMetric`s in logs, and when reporting values.
+- Uses a time-ordered log of interval values with the same ring buffer memory management approach of `Counter`.
+- Uses a `PollingSource` function to poll for measurements on a fixed interval.
+  - These functions should return quickly to prevent delaying the polling loop of a `PollingMetric`.
+- Can report the total or average of a set of `PollingMetric` measurements.
+- A custom `CommitAction` can be added to a `PollingMetric` to persist measurements.
+
 [channels.go](channels.go) provides some utilities that can be helpful in more complicated or branching pipeline scenarios.
+- `Try*` functions can prevent or limit blocking when publishing to or receiving from channels.
+- `Fork` and `Join` allows duplicating and aggregating channel output, respectively.
+
+[limits.go](limits.go) provides some utilities to express resiliency policy limits when working with external resources.
+- `Limiter` can establish average or maximum operation rates.
+- `RetryLoop` is a configurable loop that automatically retries operations, and is flexible enough to express fixed interval or exponential backoff retry behaviors.

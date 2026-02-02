@@ -70,6 +70,18 @@ func NewContext(logger ...Logger) *Context {
 	return &Context{Context: context.Background(), logger: log, errs: nil}
 }
 
+// NewContextFromContext creates a Context from a context.Context.
+func NewContextFromContext(base context.Context, logger ...Logger) *Context {
+	if base == nil {
+		base = context.Background()
+	}
+	log := DefaultLogger()
+	if len(logger) > 0 {
+		log = logger[0]
+	}
+	return &Context{Context: base, logger: log, errs: nil}
+}
+
 func WithCancel(base *Context) (*Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(base)
 	return &Context{Context: ctx, logger: base.logger, errs: base.errs}, cancel

@@ -8,6 +8,8 @@ import (
 
 type signal = chan struct{}
 
+// Resolver is a function that resolves the state of a Future.
+// A Resolver is safe to call multiple times, but only the first value will be set in the Future.
 type Resolver[T any] = func(result T, err error)
 
 type Future[T any] interface {
@@ -34,18 +36,22 @@ func NewFuture[T any]() (Future[T], Resolver[T]) {
 	return newFuture[T]()
 }
 
-func NewResolvedFuture[T any](value T, err error) Future[T] {
+func AsFuture[T any](value T, err error) Future[T] {
 	f, r := NewFuture[T]()
 	r(value, err)
 	return f
 }
 
 func newFuture[T any]() (*future[T], Resolver[T]) {
+	var hasResolved atomic.Bool
 	f := &future[T]{
 		result:   make(chan *Result[T], 1),
 		cacheSet: make(signal),
 	}
 	r := func(value T, err error) {
+		if !hasResolved.CompareAndSwap(false, true) {
+			return
+		}
 		f.result <- &Result[T]{value, err}
 		close(f.result)
 	}
@@ -65,6 +71,7 @@ func (f *future[T]) GetResult() *Result[T] {
 	case <-f.timeout:
 		return &Result[T]{mt, context.DeadlineExceeded}
 	case res := <-f.result:
+		f.timeout = nil
 		if f.settingCache.CompareAndSwap(false, true) {
 			f.cached = res
 			close(f.cacheSet)
@@ -75,13 +82,14 @@ func (f *future[T]) GetResult() *Result[T] {
 	}
 }
 
-func NewFutureWithTimeout[T any](timeout time.Duration, base Future[T]) Future[T] {
+func WrapFutureWithTimeout[T any](timeout time.Duration, base Future[T]) Future[T] {
 	f, r := newFuture[T]()
-	f.timeout = make(signal)
+	timeoutCh := make(signal)
+	f.timeout = timeoutCh
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	go func() {
 		defer cancel()
-		defer close(f.timeout)
+		defer close(timeoutCh)
 		var mt T
 		select {
 		case <-ctx.Done():

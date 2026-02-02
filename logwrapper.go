@@ -5,12 +5,16 @@ import (
 	"os"
 )
 
+const (
+	DefaultLogLevel = slog.LevelWarn
+)
+
 var (
 	leveler slog.LevelVar
 )
 
 func init() {
-	leveler.Set(slog.LevelWarn)
+	leveler.Set(DefaultLogLevel)
 }
 
 // SetDefaultLoggerLevel will set the logging level used by the DefaultLogger.

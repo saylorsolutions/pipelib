@@ -2,10 +2,11 @@ package pipe_test
 
 import (
 	"errors"
-	"github.com/saylorsolutions/pipelib"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/saylorsolutions/pipelib"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -58,10 +59,10 @@ func TestFuture_GetResult_Err(t *testing.T) {
 	assert.Error(t, res.Err)
 }
 
-func TestNewFutureWithTimeout(t *testing.T) {
+func TestWrapFutureWithTimeout(t *testing.T) {
 	existing := testFutureFunc(time.Second)()
 	start := time.Now()
-	f := pipe.NewFutureWithTimeout(100*time.Millisecond, existing)
+	f := pipe.WrapFutureWithTimeout(100*time.Millisecond, existing)
 	res := f.GetResult()
 	blockingTime := time.Since(start)
 	assert.Error(t, res.Err)
@@ -70,10 +71,10 @@ func TestNewFutureWithTimeout(t *testing.T) {
 	assert.GreaterOrEqual(t, blockingTime, 100*time.Millisecond)
 }
 
-func TestNewResolvedFuture(t *testing.T) {
-	f := pipe.NewResolvedFuture(true, nil)
+func TestAsFuture(t *testing.T) {
+	f := pipe.AsFuture(true, nil)
 	start := time.Now()
-	f = pipe.NewFutureWithTimeout(100*time.Millisecond, f)
+	f = pipe.WrapFutureWithTimeout(100*time.Millisecond, f)
 	res := f.GetResult()
 	blockingTime := time.Since(start)
 	assert.Less(t, blockingTime, 100*time.Millisecond)
