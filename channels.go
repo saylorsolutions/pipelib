@@ -2,7 +2,6 @@ package pipe
 
 import (
 	"context"
-	"fmt"
 	"time"
 )
 
@@ -14,6 +13,9 @@ import (
 func Fork[T any](ctx context.Context, in <-chan T) (<-chan T, <-chan T) {
 	a, b := make(chan T), make(chan T)
 	go func() {
+		defer func() {
+			Drain(in)
+		}()
 		defer close(a)
 		defer close(b)
 		for val := range in {
@@ -45,6 +47,10 @@ func Fork[T any](ctx context.Context, in <-chan T) (<-chan T, <-chan T) {
 func Join[T any](ctx context.Context, a, b <-chan T) <-chan T {
 	out := make(chan T)
 	go func() {
+		defer func() {
+			Drain(a)
+			Drain(b)
+		}()
 		defer close(out)
 		for {
 			if a == nil && b == nil {
@@ -84,7 +90,8 @@ func Join[T any](ctx context.Context, a, b <-chan T) <-chan T {
 // This prevents deadlocking in an async context because it ensures that there is always a reader actively handling values passed to the channel.
 func Drain[T any](ch <-chan T) {
 	go func() {
-		DrainSync(ch)
+		for range ch {
+		}
 	}()
 }
 
@@ -104,6 +111,18 @@ func TryPublish[T any](out chan<- T, val T) bool {
 	}
 }
 
+// TryPublishTimeout will do the same thing as TryPublish, but does so with a timeout instead of returning immediately after finding the channel is full.
+func TryPublishTimeout[T any](out chan<- T, timeout time.Duration, val T) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	select {
+	case out <- val:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 // ReceiveResult indicates the read case that happened in TryReceive.
 type ReceiveResult int
 
@@ -119,6 +138,10 @@ func (r ReceiveResult) IsClosed() bool {
 
 func (r ReceiveResult) GotValue() bool {
 	return r == ReceiveRead
+}
+
+func (r ReceiveResult) NoValue() bool {
+	return r == ReceiveEmpty || r == ReceiveClosed
 }
 
 // TryReceive will attempt to receive from the channel.
@@ -143,45 +166,23 @@ func TryReceive[T any](in <-chan T) (T, ReceiveResult) {
 	}
 }
 
-// Limiter is a channel that will emit messages at a fixed rate.
-// This means that reading from the channel before performing limited tasks will maintain the established rate.
-type Limiter <-chan struct{}
-
-// Wait will block until the next Limiter tick, which indicates that the operation is allowed to proceed.
-// Wait will return false if the Limiter is closed, indicating that no further operations are permitted.
-func (l Limiter) Wait() bool {
-	_, more := <-l
-	return more
-}
-
-func RateLimit(ctx context.Context, limit int, interval time.Duration) (Limiter, error) {
-	if limit <= 0 {
-		return nil, fmt.Errorf("limit must be greater than 0")
+// TryReceiveTimeout does the same thing as TryReceive, but does so with a timeout instead of returning immediately after finding the channel is empty.
+func TryReceiveTimeout[T any](in <-chan T, timeout time.Duration) (T, ReceiveResult) {
+	var (
+		mt          T
+		ctx, cancel = context.WithTimeout(context.Background(), timeout)
+	)
+	defer cancel()
+	if in == nil {
+		return mt, ReceiveClosed
 	}
-	if interval <= 0 {
-		return nil, fmt.Errorf("interval must be greater than 0")
-	}
-	timeBetweenTicks := interval / time.Duration(limit)
-	if timeBetweenTicks == 0 {
-		return nil, fmt.Errorf("tick interval is too small to represent")
-	}
-	limiter := make(chan struct{}, limit-1)
-	ticks := time.NewTicker(timeBetweenTicks)
-	go func() {
-		defer close(limiter)
-		defer ticks.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticks.C:
-				select {
-				case <-ctx.Done():
-					return
-				case limiter <- struct{}{}:
-				}
-			}
+	select {
+	case val, more := <-in:
+		if !more {
+			return val, ReceiveClosed
 		}
-	}()
-	return limiter, nil
+		return val, ReceiveRead
+	case <-ctx.Done():
+		return mt, ReceiveEmpty
+	}
 }

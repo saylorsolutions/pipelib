@@ -1,50 +1,13 @@
 package pipe_test
 
 import (
-	"context"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/saylorsolutions/pipelib"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
-
-func TestRateLimit(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second/2)
-	defer cancel()
-	limit, err := pipe.RateLimit(ctx, 20, time.Second)
-	require.NoError(t, err)
-	var count int
-	for {
-		if !limit.Wait() {
-			break
-		}
-		count++
-	}
-	t.Log("Count:", count)
-	assert.Greater(t, count, 8)
-	assert.LessOrEqual(t, count, 10)
-}
-
-func TestInterruptedRateLimit(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	limit, err := pipe.RateLimit(ctx, 10, time.Second/2)
-	require.NoError(t, err)
-	var count int
-	time.Sleep(time.Second / 2)
-	for {
-		if !limit.Wait() {
-			break
-		}
-		count++
-	}
-	t.Log("Count:", count)
-	assert.Greater(t, count, 18)
-	assert.LessOrEqual(t, count, 20)
-}
 
 func TestForkJoin(t *testing.T) {
 	ctx, cancel := testContext(false)
@@ -74,6 +37,34 @@ func TestForkJoin(t *testing.T) {
 	}
 	close(source)
 	wg.Wait()
+}
+
+func TestForkDrain(t *testing.T) {
+	ctx, cancel := pipe.WithCancel(pipe.NewContext())
+	src := make(chan int, 5)
+	a, b := pipe.Fork(ctx, src)
+	for i := range 5 {
+		src <- i
+	}
+	pipe.Drain(b)
+	for i := range 5 {
+		val, more := <-a
+		if !more {
+			assert.True(t, i >= 2)
+		}
+		t.Log(val)
+		if i == 1 {
+			cancel()
+		}
+	}
+	_, result := pipe.TryReceive(a)
+	assert.True(t, result.IsClosed())
+	_, result = pipe.TryReceive(b)
+	assert.True(t, result.IsClosed())
+	time.Sleep(500 * time.Millisecond)
+	val, result := pipe.TryReceive(src)
+	t.Log("Remaining value:", val)
+	assert.True(t, result.NoValue())
 }
 
 func TestTryPublish(t *testing.T) {
